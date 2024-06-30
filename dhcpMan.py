@@ -1,22 +1,36 @@
 import socket
 import struct
-from typing import Dict
+from typing import Dict, List
 from socket import inet_ntoa
 
 class Protocols:
     DHCP_HEADER = struct.Struct("!4BI2H4s4s4s4s16s64s128sI")
 
     @staticmethod
-    def decode_dhcp(message: bytes) -> Dict:
-        dhcp_header = Protocols.DHCP_HEADER.unpack_from(message)
-        op, htype, hlen, hops, xid, secs, flags, ciaddr, yiaddr, siaddr, giaddr, chaddr, sname, bootf = dhcp_header
+    def decode_dhcp(message: bytes, display: List, offset: int) -> Dict:
+        '''Decode DHCP packet
+        Args:
+            message (bytes): The received data from the socket
+            display (List): Protocols whitelist to print
+            offset (int): Ethernet + IPv4 offset
+        Returns:
+            result (Dict): The decode result
+        '''
+        try:
+            dhcp_header = Protocols.DHCP_HEADER.unpack_from(message, offset)
+        except struct.error:
+            print("Erro ao desempacotar o cabeçalho DHCP. O tamanho do pacote pode estar incorreto.")
+            return {}
+
+        # Corrigido: Desempacotar apenas os campos necessários
+        op, htype, hlen, hops, xid, secs, flags, ciaddr, yiaddr, siaddr, giaddr, chaddr = dhcp_header
 
         result = {
             "op": op,
             "htype": htype,
             "hlen": hlen,
             "hops": hops,
-            "xid": xid,
+            "xid": hex(xid),
             "secs": secs,
             "flags": flags,
             "ciaddr": inet_ntoa(ciaddr),
@@ -24,12 +38,14 @@ class Protocols:
             "siaddr": inet_ntoa(siaddr),
             "giaddr": inet_ntoa(giaddr),
             "chaddr": ':'.join(f"{i:02x}" for i in chaddr[:6]),
-            "sname": sname.decode('utf-8').rstrip('\x00'),
-            "bootf": bootf.decode('utf-8').rstrip('\x00')
         }
 
-        options = Protocols.parse_dhcp_options(message, Protocols.DHCP_HEADER.size)
+        options = Protocols.parse_dhcp_options(message, offset + Protocols.DHCP_HEADER.size)
         result.update(options)
+
+        if "DHCP" in display:
+            print("Mensagem DHCP recebida:")
+            print(result)
 
         return result
 
@@ -50,14 +66,15 @@ def main():
     try:
         sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(3))
     except OSError as e:
-        print(f"Error creating socket: {e}")
+        print(f"Erro ao criar o socket: {e}")
         return
     
     while True:
         message, _ = sock.recvfrom(2048)
-        dhcp_message = Protocols.decode_dhcp(message)
-        print("Received DHCP message:")
+        dhcp_message = Protocols.decode_dhcp(message, display=["DHCP"], offset=0)
+        print("Mensagem DHCP recebida:")
         print(dhcp_message)
 
 if __name__ == "__main__":
     main()
+
