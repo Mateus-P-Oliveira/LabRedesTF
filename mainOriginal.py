@@ -2,7 +2,7 @@
 import argparse
 from socket import socket, AF_PACKET, SOCK_RAW, ntohs
 
-from protocols import Protocols
+from protocolsOriginal import Protocols
 
 
 def dumpclean(obj) -> None:
