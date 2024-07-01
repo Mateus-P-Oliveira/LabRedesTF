@@ -65,6 +65,7 @@ class Protocols:
 def main():
     try:
         sock = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(3))
+        print("Socket: []", sock)
     except OSError as e:
         print(f"Erro ao criar o socket: {e}")
         return

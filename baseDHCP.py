@@ -106,6 +106,8 @@ def handle_dhcp_packet(packet):
 def main():
     s = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_UDP)
     s.bind(('0.0.0.0', DHCP_SERVER_PORT))
+    print("Socket [baseDHCP]", s)
+
 
     while True:
         packet, address = s.recvfrom(4096)
