@@ -129,9 +129,11 @@ def extract_domain_from_query(query):
         i += length + 1
     return domain[:-1]
 
+import socket
+
 def build_dns_response(query, ip):
     transaction_id = query[:2]
-    flags = b'\x81\x80'  # Resposta padrão com flags indicando resposta sem erro
+    flags = b'\x81\x80'  # Resposta com flag padrão (sem erro)
     questions = query[4:6]
     answer_rrs = b'\x00\x01'  # Número de respostas
     authority_rrs = b'\x00\x00'
@@ -140,10 +142,14 @@ def build_dns_response(query, ip):
     # Cabeçalho da resposta
     response = transaction_id + flags + questions + answer_rrs + authority_rrs + additional_rrs
     
-    # Consulta original
-    response += query[12:]
+    # Adicionando a pergunta original
+    query_name_end = query.find(b'\x00', 12) + 1
+    response += query[12:query_name_end]
     
-    # Resposta
+    # Adicionando o tipo e a classe da pergunta original
+    response += query[query_name_end:query_name_end+4]
+    
+    # Adicionando a resposta
     response += b'\xc0\x0c'  # Ponteiro para o nome do domínio na consulta original
     response += b'\x00\x01'  # Tipo (A)
     response += b'\x00\x01'  # Classe (IN)
@@ -151,6 +157,11 @@ def build_dns_response(query, ip):
     response += b'\x00\x04'  # Comprimento dos dados
     response += socket.inet_aton(ip)  # Endereço IP
     
+    # Log para depuração
+    print(f"Construindo resposta DNS: transaction_id={transaction_id}, flags={flags}, questions={questions}, "
+          f"answer_rrs={answer_rrs}, authority_rrs={authority_rrs}, additional_rrs={additional_rrs}, "
+          f"response={response}")
+
     return response
 
 
