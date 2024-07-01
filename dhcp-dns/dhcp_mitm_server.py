@@ -110,7 +110,9 @@ def start_dns_server():
     while True:
         query, addr = dns_socket.recvfrom(512)
         print(f"Consulta DNS recebida de {addr}")
+        print(f"Conteúdo da consulta DNS: {query}")
         domain = extract_domain_from_query(query)
+        print(f"Dominio extraído: {domain}")
         if domain in dns_mapping:
             response = build_dns_response(query, dns_mapping[domain])
             dns_socket.sendto(response, addr)
@@ -129,19 +131,28 @@ def extract_domain_from_query(query):
 
 def build_dns_response(query, ip):
     transaction_id = query[:2]
-    flags = b'\x81\x80'
+    flags = b'\x81\x80'  # Resposta padrão com flags indicando resposta sem erro
     questions = query[4:6]
-    answer_rrs = b'\x00\x01'
+    answer_rrs = b'\x00\x01'  # Número de respostas
     authority_rrs = b'\x00\x00'
     additional_rrs = b'\x00\x00'
-    response = transaction_id + flags + questions + answer_rrs + authority_rrs + additional_rrs + query[12:]
-    response += b'\xc0\x0c'  # Nome (ponto de referência para o nome do domínio)
+    
+    # Cabeçalho da resposta
+    response = transaction_id + flags + questions + answer_rrs + authority_rrs + additional_rrs
+    
+    # Consulta original
+    response += query[12:]
+    
+    # Resposta
+    response += b'\xc0\x0c'  # Ponteiro para o nome do domínio na consulta original
     response += b'\x00\x01'  # Tipo (A)
     response += b'\x00\x01'  # Classe (IN)
     response += b'\x00\x00\x00\x3c'  # TTL (60 segundos)
     response += b'\x00\x04'  # Comprimento dos dados
     response += socket.inet_aton(ip)  # Endereço IP
+    
     return response
+
 
 def main():
     threading.Thread(target=dhcp_server_main).start()

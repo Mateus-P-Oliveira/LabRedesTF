@@ -1,6 +1,7 @@
 import socket
 import struct
 import time
+import os
 
 def create_dhcp_client_socket():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -60,6 +61,12 @@ def send_dhcp_request(sock, transaction_id, requested_ip, server_ip):
     sock.sendto(request_packet, ('<broadcast>', 67))
     print("DHCP Request enviado.")
 
+def apply_dns_configuration(dns_ip):
+    resolv_conf_path = '/etc/resolv.conf'
+    with open(resolv_conf_path, 'w') as resolv_conf:
+        resolv_conf.write(f"nameserver {dns_ip}\n")
+    print(f"Configuração DNS aplicada: {dns_ip}")
+
 def main():
     client_socket = create_dhcp_client_socket()
     send_dhcp_discover(client_socket)
@@ -73,6 +80,8 @@ def main():
     server_ip = socket.inet_aton('192.168.1.1')  # IP do servidor DHCP
 
     send_dhcp_request(client_socket, transaction_id, requested_ip, server_ip)
+
+    apply_dns_configuration('192.168.1.1')
 
 if __name__ == "__main__":
     main()
